@@ -1,0 +1,27 @@
+name: Run Unit Tests
+
+# Runs automatically on every push and every pull request to main,
+# so the tests execute "with every change you make" as the brief requires.
+on:
+  push:
+    branches: [ "main", "**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: maven
+
+      - name: Run tests with Maven
+        run: mvn -B test
