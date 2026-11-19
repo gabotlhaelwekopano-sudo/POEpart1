@@ -4,10 +4,15 @@
  */
 package com.mycompany.poepart1;
 
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -15,17 +20,32 @@ import java.util.regex.Pattern;
  * Message.java
  *
  * Represents a single QuickChat message, with validation, hashing,
- * sending/storing/discarding logic, and simple JSON storage.
+ * sending/storing/discarding logic, JSON storage, and (Part 3) the
+ * parallel arrays and array-search features: longest message, search
+ * by recipient, search by message ID, delete by hash, and reporting.
  *
- * JSON storage approach reference:
- * Oracle. (n.d.). Class FileWriter. Java Platform SE 8 Documentation.
+ * JSON writing/reading approach reference:
+ * Oracle. (n.d.). Class FileWriter / Class BufferedReader. Java Platform SE 8 Documentation.
  * https://docs.oracle.com/javase/8/docs/api/java/io/FileWriter.html
+ * https://docs.oracle.com/javase/8/docs/api/java/io/BufferedReader.html
+ * Baeldung. (n.d.). Java – Read a File Line by Line.
+ * https://www.baeldung.com/java-read-lines-large-file
+ * (Used as a reference for reading a text file back into memory line by line;
+ * the JSON here is written and parsed manually, without an external library,
+ * since each line is a single flat JSON object with no nested structure.)
  */
 public class Message {
 
-    // Shared across all Message objects created during this run of the program
-    private static List<String> sentMessages = new ArrayList<>();
+    // ---------- Part 2 fields (kept for backward compatibility) ----------
+    private static List<String> sentMessages = new ArrayList<>(); // full-detail strings, used by printMessages()
     private static int totalMessagesSent = 0;
+
+    // ---------- Part 3: parallel arrays, populated as the app runs (no hard-coding) ----------
+    private static List<Message> sentMessageArray = new ArrayList<>();
+    private static List<Message> disregardedMessageArray = new ArrayList<>();
+    private static List<Message> storedMessageArray = new ArrayList<>();
+    private static List<String> messageHashArray = new ArrayList<>();
+    private static List<String> messageIDArray = new ArrayList<>();
 
     private String messageID;
     private String recipient;
@@ -44,9 +64,10 @@ public class Message {
     }
 
     /**
-     * Test-only constructor — lets unit tests supply a fixed message ID,
-     * since the hash depends on the first two digits of the ID and random
-     * IDs can't be asserted against a fixed expected value.
+     * Test-only / fixed-ID constructor — lets unit tests (and JSON loading)
+     * supply a known message ID, since the hash depends on the first two
+     * digits of the ID and random IDs can't be asserted against a fixed
+     * expected value.
      */
     public Message(String messageID, String recipient, String messageText, int messageNumber) {
         this.messageID = messageID;
@@ -132,7 +153,10 @@ public class Message {
     // ---------- SentMessage() ----------
     /**
      * Handles the user's choice to send, store, or disregard the message.
-     * choice should be "send", "store", or "disregard".
+     * choice should be "send", "store", or "disregard". This is the single
+     * place all the Part 3 arrays get populated — never by hard-coding
+     * data directly into an array, only by a message actually being
+     * processed through this method.
      */
     public String sentMessage(String choice) {
         if (choice == null) return "Invalid choice.";
@@ -141,12 +165,22 @@ public class Message {
             case "send":
                 totalMessagesSent++;
                 sentMessages.add(getFullDetails());
+                sentMessageArray.add(this);
+                if (messageHash != null) messageHashArray.add(messageHash);
+                messageIDArray.add(messageID);
                 return "Message successfully sent.";
+
             case "disregard":
+                disregardedMessageArray.add(this);
                 return "Press 0 to delete the message.";
+
             case "store":
                 storeMessage();
+                storedMessageArray.add(this);
+                if (messageHash != null) messageHashArray.add(messageHash);
+                messageIDArray.add(messageID);
                 return "Message successfully stored.";
+
             default:
                 return "Invalid choice.";
         }
@@ -175,7 +209,7 @@ public class Message {
         return totalMessagesSent;
     }
 
-    // ---------- storeMessage() (student-defined, JSON storage) ----------
+    // ---------- storeMessage() (JSON storage) ----------
     /**
      * Appends this message as one JSON object (one per line) to messages.json
      * in the project's working directory. Kept dependency-free by building
@@ -193,9 +227,141 @@ public class Message {
         }
     }
 
-    /** Resets the shared counters — call this between unit tests so they don't affect each other. */
+    // ---------- Part 3: read the JSON file back into the storedMessageArray ----------
+    /**
+     * Reads messages.json back into storedMessageArray, one JSON object per
+     * line. This is a manual, dependency-free parser (no external JSON
+     * library) since every line is a single flat object with four known
+     * fields — see the class-level comment for the reading approach reference.
+     */
+    public static void loadStoredMessagesFromFile() {
+        storedMessageArray.clear();
+        File file = new File("messages.json");
+        if (!file.exists()) return;
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            int index = 0;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+
+                String id = extractJsonField(line, "messageID");
+                String recipient = extractJsonField(line, "recipient");
+                String text = extractJsonField(line, "message");
+                String hash = extractJsonField(line, "hash");
+
+                Message loaded = new Message(id, recipient, text, index++);
+                loaded.messageHash = hash;
+                storedMessageArray.add(loaded);
+
+                if (!messageIDArray.contains(id)) messageIDArray.add(id);
+                if (!messageHashArray.contains(hash)) messageHashArray.add(hash);
+            }
+        } catch (IOException e) {
+            System.out.println("Error reading stored messages from file: " + e.getMessage());
+        }
+    }
+
+    /** Pulls the value out of a one-line {"key":"value",...} JSON string. */
+    private static String extractJsonField(String json, String key) {
+        String marker = "\"" + key + "\":\"";
+        int start = json.indexOf(marker);
+        if (start == -1) return "";
+        start += marker.length();
+        int end = json.indexOf("\"", start);
+        while (end > 0 && json.charAt(end - 1) == '\\') {
+            end = json.indexOf("\"", end + 1);
+        }
+        if (end == -1) return "";
+        return json.substring(start, end).replace("\\\"", "\"");
+    }
+
+    // ---------- Part 3: array getters (defensive copies) ----------
+    public static List<Message> getSentMessageArray() { return new ArrayList<>(sentMessageArray); }
+    public static List<Message> getDisregardedMessageArray() { return new ArrayList<>(disregardedMessageArray); }
+    public static List<Message> getStoredMessageArray() { return new ArrayList<>(storedMessageArray); }
+    public static List<String> getMessageHashArray() { return new ArrayList<>(messageHashArray); }
+    public static List<String> getMessageIDArray() { return new ArrayList<>(messageIDArray); }
+
+    // ---------- Part 3: array-based features (generic, reused by both the
+    //            interactive "Stored Messages" menu and the unit tests) ----------
+
+    /** Builds a "Recipient: X" line for every message in the given list. */
+    public static String displaySenderAndRecipient(List<Message> messages) {
+        StringBuilder sb = new StringBuilder();
+        for (Message m : messages) {
+            sb.append("Recipient: ").append(m.recipient).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /** Returns the text of the longest message in the given list. */
+    public static String displayLongestMessage(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) return "No messages available.";
+        Message longest = messages.get(0);
+        for (Message m : messages) {
+            if (m.messageText.length() > longest.messageText.length()) {
+                longest = m;
+            }
+        }
+        return longest.messageText;
+    }
+
+    /** Searches a list of messages for a given message ID. */
+    public static String searchByMessageID(List<Message> messages, String id) {
+        for (Message m : messages) {
+            if (m.messageID.equals(id)) {
+                return "Recipient: " + m.recipient + "\nMessage: " + m.messageText;
+            }
+        }
+        return "No message found with that ID.";
+    }
+
+    /** Returns every message's text, from a list, sent to the given recipient. */
+    public static String searchByRecipient(List<Message> messages, String recipient) {
+        StringBuilder sb = new StringBuilder();
+        for (Message m : messages) {
+            if (recipient.equals(m.recipient)) {
+                sb.append(m.messageText).append("\n");
+            }
+        }
+        String result = sb.toString().trim();
+        return result.isEmpty() ? "No messages found for that recipient." : result;
+    }
+
+    /** Deletes a message from storedMessageArray using its hash. */
+    public static String deleteMessageByHash(String hash) {
+        Iterator<Message> it = storedMessageArray.iterator();
+        while (it.hasNext()) {
+            Message m = it.next();
+            if (hash.equals(m.messageHash)) {
+                it.remove();
+                return "Message: \"" + m.messageText + "\" successfully deleted.";
+            }
+        }
+        return "No stored message found with that hash.";
+    }
+
+    /** Full ID/Hash/Recipient/Message report for every message in the given list. */
+    public static String displayReport(List<Message> messages) {
+        StringBuilder sb = new StringBuilder();
+        for (Message m : messages) {
+            sb.append("Message ID: ").append(m.messageID).append("\n")
+              .append("Message Hash: ").append(m.messageHash).append("\n")
+              .append("Recipient: ").append(m.recipient).append("\n")
+              .append("Message: ").append(m.messageText).append("\n---\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /** Resets every shared array/counter — call this between unit tests so one test can't affect another. */
     public static void resetTotals() {
         sentMessages.clear();
         totalMessagesSent = 0;
+        sentMessageArray.clear();
+        disregardedMessageArray.clear();
+        storedMessageArray.clear();
+        messageHashArray.clear();
+        messageIDArray.clear();
     }
 }
